@@ -1,0 +1,22 @@
+---
+title: "Batteries"
+author: "Olga Gerlich"
+date: "2024-11-01"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+### Załadowanie bibliotek
+```{r libraries}
+library(dplyr)
+library(ggplot2)
+```
+
+```{r, echo=FALSE}
+df <- read.csv('mp_batteries.csv')
+head(df)
+summary(df)
+```
