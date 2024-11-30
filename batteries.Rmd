@@ -1,22 +1,516 @@
 ---
-title: "Batteries"
+title: "Analiza materiałów wykorzystywanych w tworzeniu baterii"
 author: "Olga Gerlich"
-date: "2024-11-01"
-output: html_document
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: "show"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 ```
 
-### Załadowanie bibliotek
+## Podsumowanie
+
+Analiza przeprowadzona w tym raporcie koncentrowała się na badaniu zależności między różnymi właściwościami baterii. Główne spostrzeżenia obejmują:
+
+- Dominującym głównym jonem baterii jest lit, który stanowi 50% wszystkich badanych baterii.
+- Baterie wapniowe mogą być dobrą alternatywą do litowo-jonowych, ponieważ mają dużą gęstość energii (największą z badanych jonów), większą pojemność oraz lepszy wskaźnik stabilności. To powoduje, że mogą one oferować obiecującą wydajność i wyższy poziom bezpieczeństwa.
+- Silne korelacje między parametrami wolumetrycznymi i grawimetrycznymi.
+- Silne korelacje między gęstością energii i pojemnością.
+- Model regresji osiągnął wysoki współczynnik determinacji (R²), co wskazuje na dobrą jakość predykcji gęstości energii wolumetrycznej.
+
+Przeprowadzona analiza może być przydatna w dalszych badaniach oraz w praktycznych zastosowaniach projektowania akumulatorów.
+
+## Załadowanie bibliotek
 ```{r libraries}
 library(dplyr)
 library(ggplot2)
+library(kableExtra)
+library(tidyr)
+library(plotly)
+library(corrplot)
+library(ggcorrplot)
+library(caret)
 ```
 
-```{r, echo=FALSE}
-df <- read.csv('mp_batteries.csv')
-head(df)
-summary(df)
+```{r, echo=FALSE, cache=TRUE}
+data <- read.csv('mp_batteries.csv')
 ```
+
+## Podstawowe statystyki
+- Rozmiar zbioru danych: `r nrow(data)` wierszy i `r ncol(data)` kolumn
+- Liczba brakujących wartości: `r sum(is.na(data))`
+
+**Zbiór nie zawiera pustych wartości**
+
+```{r, echo=FALSE}
+knitr::kable(summary(data)) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F) %>%
+  scroll_box(width = "100%")
+```
+
+### Zawartość zbioru
+```{r, echo=FALSE}
+knitr::kable(head(data)) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F) %>%
+  scroll_box(width = "100%")
+```
+
+## Czyszczenie zbioru danych
+### Bezwzględne wartości napięcia i energii
+
+W związku z tym, że w baterii płynie prąd stały, do analizy wykorzystano średnią z wartości bezwzględnych napięć i energii zamiast RMS (średniej kwadratowej), która lepiej nadaje się do prądu zmiennego.
+
+W celu ułatwienia dalszej analizy wyznaczono bezwzględną wartość napięć oraz energii. Ujemne wartości oznaczają przeciwną polaryzację napięcia, która nie wpływa na energię zgromadzoną w baterii.
+
+```{r abs}
+data <- data %>%
+  mutate(Average.Voltage = abs(Average.Voltage)) %>%
+  mutate(Gravimetric.Energy = abs(Gravimetric.Energy)) %>%
+  mutate(Volumetric.Energy = abs(Volumetric.Energy))
+```
+
+### Usunięcie wartości odstających
+Przed analizą danych konieczne było usunięcie wartości odstających (outliers), ponieważ mogły one zaburzyć analizę i doprowadzić do błędnych wniosków. Zastosowano metodę rozstępu ćwiartkowego (IQR), polegającą na obliczeniu przedziału międzykwartylowego i usunięciu wartości leżących poza tym przedziałem.
+
+\[
+\text{Outliers} = \{ x : x > Q3 + threshold \cdot IQR \; \text{or} \; x < Q1 - threshold \cdot IQR \}
+\]
+threshold domyślnie jest ustawiony na 1,5.
+
+**Uwaga! W przypadku wystąpienia wartości odstającej w danej kolumnie usuwany jest cały wiersz, w którym się ona znajduje. Dzięki temu liczność każdej kolumny pozostaje taka sama. Takie podejście zastosowano, ponieważ analiza obejmuje zależności między atrybutami. Dodatkowo założono, że jeśli wartość jednego atrybutu jest odstająca, to pozostałe atrybuty w tym samym wierszu mogły zostać błędnie wyznaczone.**
+
+```{r outliers_column, echo=FALSE}
+# # Funkcja do usuwania wartości odstających
+# remove_outliers <- function(data, column) {
+#   Q1 <- quantile(data[[column]], 0.25)
+#   Q3 <- quantile(data[[column]], 0.75)
+#   IQR <- IQR(data[[column]])
+# 
+#   data[data[[column]] > (Q1 - 1.5 * IQR) & data[[column]] < (Q3 + 1.5 * IQR), ]
+# }
+# 
+# # Usuwanie wartości odstających dla wszystkich kolumn w zbiorze numeric_data
+# for (col in names(numeric_data)) {
+#   cleared_numeric_data <- remove_outliers(numeric_data, col)
+# }
+```
+
+```{r outliers}
+# Funkcja do oznaczania wierszy z wartościami odstającymi (tylko dla kolumn numerycznych)
+remove_outliers_rowwise <- function(data, threshold = 1.5) {
+  # Wybierz tylko numeryczne kolumny
+  numeric_columns <- sapply(data, is.numeric)
+
+  # Zastosuj funkcję tylko do numerycznych kolumn
+  outlier_mask <- apply(data[, numeric_columns, drop = FALSE], 1, function(row) {
+    # Sprawdzanie odstających wartości w każdym wierszu
+    any(sapply(1:length(row), function(i) {
+      col <- names(data)[numeric_columns][i]
+
+      Q1 <- quantile(data[[col]], 0.25)
+      Q3 <- quantile(data[[col]], 0.75)
+      IQR <- IQR(data[[col]])
+
+      row[col] < (Q1 - threshold * IQR) || row[col] > (Q3 + threshold * IQR)
+    }))
+  })
+
+  # Zwróć dane bez wierszy z wartościami odstającymi
+  data[!outlier_mask, ]
+}
+
+cleared_data <- remove_outliers_rowwise(data, 3)
+# cleared_data <- data
+```
+<!-- TODO: TYM SPOSOBEM USUNĘŁAM PRAWIE POŁOWĘ ZBIORU - TO COŚ NIE TAK, MOŻE LEPIEJ UŻYĆ Z-SCORE; MOŻE NIE ROBIĆ TEGO DLA KOLUMNY STEPS I MAX VOLTAGE STEP -->
+
+Threshold musiał zostać zwiększony z 1.5 na 3, ponieważ przy domyślnej wartości prawie połowa zbioru została usunięta.
+
+**Liczba usuniętych wierszy przy threshold równym 3: `r nrow(data) - nrow(cleared_data)`**
+
+### Ekstrakcja atrybutów numerycznych
+```{r, echo=FALSE}
+numeric_data <- cleared_data %>% 
+  select_if(is.numeric)
+
+knitr::kable(head(numeric_data)) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F) %>%
+  scroll_box(width = "100%")
+```
+
+### Przekształcenie danych do formatu długiego (long format)
+Format danych został przekształcony tak, aby każdy atrybut i jego wartości znalazły się w dwóch osobnych kolumnach (Attribute i Value). Dzięki temu możliwe jest łatwiejsze tworzenie wykresów rozkładu wartości.
+```{r}
+data_long <- numeric_data %>%
+  pivot_longer(cols = everything(), names_to = "Atrybuty", values_to = "Wartości")
+
+data_long
+```
+
+
+## Rozkłady gęstości atrybutów dla każdej kolumny
+```{r}
+distribution_plots <- data_long %>%
+  ggplot(aes(x = Wartości)) +
+  geom_histogram(aes(y = ..density.., 
+                     text = paste("Gęstość:", round(..density.., 2), "<br>Wartość:", scales::comma(..x..))),
+                 bins = 30, color = "black", alpha = 0.5) + 
+  geom_density(color = "red", size = 0.4) +  
+  facet_wrap(~ Atrybuty, scales = "free", ncol = 3) +  
+  theme_minimal() +
+  theme(
+    panel.spacing = unit(2, "lines"),
+    axis.text.y = element_text(size = 8, margin = margin(r = 5)),
+    plot.margin = margin(b = 20, r = 10)
+  ) +
+  labs(title = "Rozkłady wartości atrybutów", x = "Wartości", y = "Gęstość")
+
+ggplotly(distribution_plots, tooltip = "text") %>%
+  layout(hovermode = "x", width = 800)
+```
+
+## Analiza wartości atrybutów
+### Liczba baterii w zależności od głównego jonu
+```{r count_batteries}
+batteries_by_ion <- cleared_data %>%
+  group_by(Working.Ion) %>%
+  summarize(n = n()) %>%
+  arrange(desc(n))
+
+count_batteries_plot <- ggplot(batteries_by_ion, aes(x = reorder(Working.Ion, n), y = n, text = paste("Liczba baterii:", n))) +
+  geom_bar(stat = "identity", color = "black") +
+  theme_minimal() +
+  labs(title = "Liczba baterii w zależności od głównego jonu", x = "Główny jon", y = "Liczba baterii") +
+  coord_flip()
+
+ggplotly(count_batteries_plot, tooltip = "text")
+```
+
+### Średnie napięcie dla różnych jonów
+```{r}
+avg_voltage_by_ion <- cleared_data %>%
+  group_by(Working.Ion) %>%
+  summarize(avg_voltage = mean(Average.Voltage)) %>%
+  arrange(desc(avg_voltage))
+
+avg_voltage_plot <- ggplot(avg_voltage_by_ion, aes(x = reorder(Working.Ion, avg_voltage), y = avg_voltage, 
+                                                   text = paste("Średnie napięcie:", round(avg_voltage, 2)))) +
+  geom_col(color = "black") +
+  theme_minimal() +
+  labs(title = "Średnie napięcie dla różnych jonów", x = "Główny jon", y = "Średnie napięcie") +
+  coord_flip()
+
+ggplotly(avg_voltage_plot, tooltip = "text")
+```
+### Porównanie gęstości energii dla każdego jonu
+```{r energy_comparison}
+average_energies <- cleared_data %>%
+  group_by(Working.Ion) %>%
+  summarize(
+    avg_gr_energy = mean(Gravimetric.Energy),
+    avg_vol_energy = mean(Volumetric.Energy)
+  ) %>%
+  mutate(total_Energy = avg_gr_energy + avg_vol_energy) %>%
+  arrange(desc(avg_vol_energy)) 
+
+data_long <- average_energies %>%
+  pivot_longer(
+    cols = c(avg_gr_energy, avg_vol_energy),
+    names_to = "energy_type",
+    values_to = "avg_energy"
+  ) %>%
+  mutate(
+    energy_type = recode(energy_type,
+                         avg_gr_energy = "Energia grawimetryczna",
+                         avg_vol_energy = "Energia wolumetryczna")
+  )
+
+energy_plot <- ggplot(data_long, aes(x = avg_energy, y = reorder(Working.Ion, avg_energy), 
+                                     fill = energy_type, text = paste("Średnia gęstość energii:", round(avg_energy, 2)))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Porównanie średniej wolumetrycznej i grawimetrycznej gęstości energii", 
+       x = "Średnia gęstość energii", y = "Główny jon", fill = "Typ gęstości energii") +
+    scale_fill_manual(values = c("#6D9EC1", "#E46726") 
+  ) +
+  theme_minimal()
+
+
+ggplotly(energy_plot, tooltip = "text")
+```
+
+### Porównanie pojemności dla każdego jonu
+```{r capacity_comparison}
+average_capacities <- cleared_data %>%
+  group_by(Working.Ion) %>%
+  summarize(
+    avg_gr_capacity = mean(Gravimetric.Capacity),
+    avg_vol_capacity = mean(Volumetric.Capacity)
+  ) %>%
+  mutate(total_capacity = avg_gr_capacity + avg_vol_capacity) %>%
+  arrange(desc(avg_vol_capacity)) 
+
+data_long_capacity <- average_capacities %>%
+  pivot_longer(
+    cols = c(avg_gr_capacity, avg_vol_capacity),
+    names_to = "capacity_type",
+    values_to = "avg_capacity"
+  ) %>%
+  mutate(
+    capacity_type = recode(capacity_type,
+                           avg_gr_capacity = "Pojemność grawimetryczna",
+                           avg_vol_capacity = "Pojemność wolumetryczna")
+  )
+
+capacity_plot <- ggplot(data_long_capacity, aes(x = avg_capacity, y = reorder(Working.Ion, avg_capacity), 
+                                                fill = capacity_type, 
+                                                text = paste("Średnia pojemność:", round(avg_capacity, 2)))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Porównanie średniej wolumetrycznej i grawimetrycznej pojemności", 
+       x = "Średnia pojemność", y = "Główny jon", fill = "Typ pojemności") +
+  scale_fill_manual(values = c("#6D9EC1", "#E46726")) +
+  theme_minimal()
+
+ggplotly(capacity_plot, tooltip = "text")
+```
+
+### Porównanie udziału atomowego dla każdego jonu
+```{r fractions_comparison}
+average_fractions <- cleared_data %>%
+  group_by(Working.Ion) %>%
+  summarize(
+    avg_atomic_fraction_charge = mean(Atomic.Fraction.Charge),
+    avg_atomic_fraction_discharge = mean(Atomic.Fraction.Discharge)
+  ) %>%
+  mutate(total_fraction = avg_atomic_fraction_charge + avg_atomic_fraction_discharge) %>%
+  arrange(desc(avg_atomic_fraction_discharge)) 
+
+data_long_fractions <- average_fractions %>%
+  pivot_longer(
+    cols = c(avg_atomic_fraction_charge, avg_atomic_fraction_discharge),
+    names_to = "fraction_type",
+    values_to = "avg_fraction"
+  ) %>%
+  mutate(
+    fraction_type = recode(fraction_type,
+                           avg_atomic_fraction_charge = "Naładowany",
+                           avg_atomic_fraction_discharge = "Rozładowany")
+  )
+
+fraction_plot <- ggplot(data_long_fractions, aes(x = avg_fraction, y = reorder(Working.Ion, avg_fraction), 
+                                                 fill = fraction_type, 
+                                                 text = paste("Średni udział atomowy:", round(avg_fraction, 2)))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Porównanie średnich udziałów atomowych w <br>stanach naładowanym i rozładowanym", 
+       x = "Średni udział atomowy", y = "Główny jon", fill = "Stan") +
+  scale_fill_manual(values = c("#6D9EC1", "#E46726")) +
+  theme_minimal()
+
+ggplotly(fraction_plot, tooltip = "text")
+```
+
+### Porównanie wskaźnika stabilności dla każdego jonu
+```{r stability_comparison}
+average_stability <- cleared_data %>%
+  group_by(Working.Ion) %>%
+  summarize(
+    avg_stability_charge = mean(Stability.Charge),
+    avg_stability_discharge = mean(Stability.Discharge)
+  ) %>%
+  mutate(total_stability = avg_stability_charge + avg_stability_discharge) %>%
+  arrange(desc(avg_stability_discharge)) 
+
+data_long_stability <- average_stability %>%
+  pivot_longer(
+    cols = c(avg_stability_charge, avg_stability_discharge),
+    names_to = "stability_type",
+    values_to = "avg_stability"
+  ) %>%
+  mutate(
+    stability_type = recode(stability_type,
+                            avg_stability_charge = "Naładowany",
+                            avg_stability_discharge = "Rozładowany")
+  )
+
+stability_plot <- ggplot(data_long_stability, aes(x = avg_stability, y = reorder(Working.Ion, avg_stability), 
+                                                  fill = stability_type, 
+                                                  text = paste("Średni wskaźnik stabilności:", round(avg_stability, 2)))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Porównanie średniego wskaźnika stabilności w <br>stanach naładowanym i rozładowanym", 
+       x = "Średni wskaźnik stabilności", y = "Główny jon", fill = "Stan") +
+  scale_fill_manual(values = c("#6D9EC1", "#E46726")) +
+  theme_minimal()
+
+ggplotly(stability_plot, tooltip = "text")
+```
+
+## Analiza korelacji między zmiennymi
+
+### Oczekiwana korelacja między pojemnościami
+Duża korelacja między **pojemnością grawimetryczną** (gravimetric capacity) a **pojemnością wolumetryczną** (volumetric capacity) jest uzasadniona. Wynika to z faktu, że iloraz tych wartości odpowiada gęstości baterii:
+
+\[
+\frac{\text{Vc}}{\text{Gc}} = \frac{\text{mAh/cm}^3}{\text{mAh/g}} = \text{gęstość baterii (g/cm}^3\text{)}.
+\]
+
+#### Oczekiwana korelacja między energiami
+Podobne zależności można zaobserwować między **wolumetryczną energią** (volumetric energy) a **grawimetryczną energią** (gravimetric energy). Wysoka korelacja jest tutaj również uzasadniona, ponieważ ich iloraz odpowiada gęstości baterii:
+
+\[
+\frac{\text{Ve}}{\text{Ge}} = \frac{\text{Wh/L}}{\text{Wh/kg}} = \text{gęstość baterii (kg/L)}.
+\]
+
+```{r correlation}
+cor_matrix <- cor(numeric_data, use = "complete.obs")
+
+correlation_plot <- ggcorrplot(
+  cor_matrix, 
+  hc.order = FALSE, 
+  lab = TRUE, 
+  type = "lower", 
+  lab_size = 2.5,
+  outline.col = "white",
+  legend.title = "Korelacja",
+  colors = c("#6D9EC1", "white", "#E46726")
+) +
+  theme_minimal(base_size = 10) +
+  theme(
+    axis.text.x = element_text(size = 8, angle = 45, vjust = 1, hjust = 1),
+    axis.text.y = element_text(size = 8)
+  ) +
+  labs(title = "Analiza korelacji", x = "", y = "")
+
+ggplotly(correlation_plot, tooltip = "text")
+```
+### Dlaczego oczekiwane współczynniki korelacji nie osiągają wartości 1?
+
+Chociaż współczynnik korelacji między pojemnościami i energiami w bateriach jest wysoki, nie osiąga wartości idealnej, czyli 1. Wynika to z faktu, że na gęstość baterii wpływa wiele czynników, nieograniczających się jedynie do głównego jonu użytego w materiale aktywnym. 
+
+Oprócz głównego jonu, istotny udział w gęstości mają pozostałe pierwiastki, takie jak dodatki stabilizujące strukturę materiału, przewodniki jonowe czy inne składniki elektrody. Ich obecność może wpływać zarówno na gęstość masową (g/cm³ lub kg/L), jak i na właściwości elektrochemiczne, takie jak napięcie czy zdolność do przechowywania energii. 
+
+### Korelacja między pojemnością a energią
+Silna korelacja między **pojemnością grawimetryczną** (gravimetric capacity) a **grawimetryczną energią** (gravimetric energy) nie była spodziewana. Jednak rzeczywiście można zauważyć, że ich iloraz jest równy wartości napięcia między zaciskami baterii.
+
+### Interpretacja współczynnika korelacji \( r \)
+Wartości współczynnika korelacji \( r \) interpretuję zgodnie z poniższymi przedziałami:
+
+  - **Bardzo silna korelacja:** \( 0.9 \leq |r| \leq 1 \)
+  - **Silna korelacja:** \( 0.7 \leq |r| < 0.9 \)
+  - **Umiarkowana korelacja:** \( 0.5 \leq |r| < 0.7 \)
+  - **Słaba korelacja:** \( 0.3 \leq |r| < 0.5 \)
+
+```{r top_correlation}
+top_correlations <- function(cor_matrix, threshold = 0.7) {
+  cor_matrix[lower.tri(cor_matrix, diag = TRUE)] <- NA
+  cor_table <- as.data.frame(as.table(cor_matrix))
+  cor_table <- cor_table[!is.na(cor_table$Freq) & abs(cor_table$Freq) >= threshold, ]
+  cor_table <- cor_table[order(-abs(cor_table$Freq)), ] 
+  cor_table %>%
+    rename('Atrybut 1' = Var1, 'Atrybut 2' = Var2, 'Współczynnik korelacji' = Freq)
+}
+
+knitr::kable(top_correlations(cor_matrix, 0.7), caption = "Tabela silnych i bardzo silnych korelacji") %>%
+  kable_styling(bootstrap_options = "striped", full_width = T)
+
+```
+
+## Predykcja gęstości energii
+
+W tej sekcji przedstawiono proces predykcji energii wolumetrycznej (**Volumetric.Energy**) na podstawie innych kluczowych atrybutów baterii. Do modelu użyto danych po usunięciu wartości odstających.
+
+Wykorzystano model regresji liniowej, który został stworzony przy użyciu zbioru treningowego (80% danych). Zbiór testowy (20%) posłużył do oceny skuteczności predykcji. 
+
+Do oceny jakości modelu wykorzystano następujące metryki:
+
+  - RMSE (Root Mean Square Error) - średnia odległość pomiędzy wartościami przewidywanymi a rzeczywistymi. Im mniejsza, tym lepiej
+  - MAE (Mean Absolute Error) - średnia bezwzględna różnica między rzeczywistymi a przewidywanymi wartościami. Im mniejsza tym lepiej
+  - R² (współczynnik determinacji) - wskaźnik, który mówi, jak dobrze model dopasowuje się do danych (od 0 do 1, gdzie 1 oznacza idealne dopasowanie). Wykorzystany został współczynnik korelacji r-Pearsona podniesiony do kwadratu.
+
+### Dobór zmiennych do modelu
+Analiza korelacji pomiędzy cechami ujawniła silne zależności między **Volumetric.Energy** a innymi atrybutami, co wymagało starannego doboru zmiennych do modelu. Z tego względu cecha **Gravimetric.Energy** została uwzględniona w modelu (r = 0.91). Natomiast z modelu wyłączono **Gravimetric.Capacity** i **Volumetric.Capacity**, ponieważ są one redundantne i mogą powodować problemy z multikolinearnością. 
+
+Po licznych próbach doboru najlepszych zmiennych końcowo do modelu włączono:
+
+- **Gravimetric.Energy** - energia grawimetryczna, 
+- **Stability.Charge** - stabilność w czasie ładowania,
+- **Atomic.Fraction.Discharge** - udział atomowy składników w stanie rozładowanym,
+- **Atomic.Fraction.Charge** - udział atomowy składników w stanie naładowanym.
+
+```{r prediction_model}
+predictors <- numeric_data %>%
+  select(Gravimetric.Energy, Stability.Charge, Atomic.Fraction.Discharge, Atomic.Fraction.Charge)
+
+response <- numeric_data$Volumetric.Energy
+
+set.seed(123)
+train_index <- createDataPartition(response, p = 0.8, list = FALSE)
+train_data <- predictors[train_index, ]
+test_data <- predictors[-train_index, ]
+train_response <- response[train_index]
+test_response <- response[-train_index]
+
+model <- lm(train_response ~ ., data = as.data.frame(train_data))
+```
+
+### Podsumowanie modelu
+```{r echo = FALSE}
+model_summary <- summary(model)
+coefficients_df <- as.data.frame(model_summary$coefficients)
+colnames(coefficients_df) <- c("Estimate", "Std. Error", "t value", "Pr(>|t|)")
+
+knitr::kable(coefficients_df, caption = "Podsumowanie współczynników modelu regresji liniowej", 
+             col.names = c("Współczynnik", "Szacunkowa wartość", "Błąd standardowy", "Statystyka t", "Wartość p")) %>%
+  kable_styling(bootstrap_options = "striped", full_width = T)
+```
+
+### Porównanie predykcji energii i rzeczywistych wartości
+```{r prediction_plot}
+predictions <- predict(model, newdata = as.data.frame(test_data))
+
+results <- data.frame(
+  Predicted = predictions,
+  Actual = test_response
+)
+
+prediction_volum <- ggplot(results, aes(x = Actual, y = Predicted, 
+                          text = paste("Rzeczywiste: ", round(Actual, 2), "<br>Przewidywane: ", round(Predicted, 2)))) +
+  geom_point() +
+  geom_abline(slope = 1, intercept = 0, color = "red") +
+  labs(
+    title = "Rzeczywiste a przewidywane wartości energii wolumetrycznej",
+    x = "Rzeczywiste",
+    y = "Przewidywane"
+  ) +
+  theme_minimal()
+
+ggplotly(prediction_volum, tooltip = "text")
+```
+
+### Ocena modelu
+```{r metrics}
+rmse <- sqrt(mean((results$Actual - results$Predicted)^2))
+mae <- mean(abs(results$Actual - results$Predicted))
+r_squared <- cor(results$Actual, results$Predicted)^2
+```
+Przedział energii wolumetrycznej: `r range(numeric_data$Volumetric.Energy, na.rm = TRUE)`
+
+Jest to bardzo szeroki zakres, co wskazuje na dużą zmienność gęstości energii w różnych przypadkach. Przewidzenie wartości z dużego przedziału wpłynęło na trudność zadania.
+
+Jednak wartości metryk są obiecujące:
+
+- RMSE (Root Mean Square Error): `r rmse`
+- MAE (Mean Absolute Error): `r mae`
+- R² (współczynnik determinacji): `r r_squared`
+
+Zwarzając na zakres rzeczywistej gęstości energii, uzyskane wartości RMSE oraz MAE świadczą o tym, że model radzi sobie stosunkowo dobrze, ale dla małych wartości może być mniej precyzyjny.  
+
+Zadowalający jest uzyskany współczynnik determinacji wynoszący 88.1%. Oznacza to, że model wyjaśnia większość zmienności zmiennej zależnej (energia wolumetryczna).
+
+### Możliwości ulepszenia
+Można by było rozważyć zastosowanie technik takich jak standaryzacja lub transformacja danych, aby lepiej poradzić sobie z dużą zmiennością badanej cechy.
+
+Również zastosowanie bardziej zaawansowanych modeli (np. modeli nieliniowych, zespołów drzew decyzyjnych) mogłoby poprawić predykcję.
