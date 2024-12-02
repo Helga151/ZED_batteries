@@ -84,22 +84,6 @@ threshold domyślnie jest ustawiony na 1,5.
 
 **Uwaga! W przypadku wystąpienia wartości odstającej w danej kolumnie usuwany jest cały wiersz, w którym się ona znajduje. Dzięki temu liczność każdej kolumny pozostaje taka sama. Takie podejście zastosowano, ponieważ analiza obejmuje zależności między atrybutami. Dodatkowo założono, że jeśli wartość jednego atrybutu jest odstająca, to pozostałe atrybuty w tym samym wierszu mogły zostać błędnie wyznaczone.**
 
-```{r outliers_column, echo=FALSE}
-# # Funkcja do usuwania wartości odstających
-# remove_outliers <- function(data, column) {
-#   Q1 <- quantile(data[[column]], 0.25)
-#   Q3 <- quantile(data[[column]], 0.75)
-#   IQR <- IQR(data[[column]])
-# 
-#   data[data[[column]] > (Q1 - 1.5 * IQR) & data[[column]] < (Q3 + 1.5 * IQR), ]
-# }
-# 
-# # Usuwanie wartości odstających dla wszystkich kolumn w zbiorze numeric_data
-# for (col in names(numeric_data)) {
-#   cleared_numeric_data <- remove_outliers(numeric_data, col)
-# }
-```
-
 ```{r outliers}
 # Funkcja do oznaczania wierszy z wartościami odstającymi (tylko dla kolumn numerycznych)
 remove_outliers_rowwise <- function(data, threshold = 1.5) {
@@ -127,7 +111,6 @@ remove_outliers_rowwise <- function(data, threshold = 1.5) {
 cleared_data <- remove_outliers_rowwise(data, 3)
 # cleared_data <- data
 ```
-<!-- TODO: TYM SPOSOBEM USUNĘŁAM PRAWIE POŁOWĘ ZBIORU - TO COŚ NIE TAK, MOŻE LEPIEJ UŻYĆ Z-SCORE; MOŻE NIE ROBIĆ TEGO DLA KOLUMNY STEPS I MAX VOLTAGE STEP -->
 
 Threshold musiał zostać zwiększony z 1.5 na 3, ponieważ przy domyślnej wartości prawie połowa zbioru została usunięta.
 
@@ -153,26 +136,44 @@ data_long
 ```
 
 
-## Rozkłady gęstości atrybutów dla każdej kolumny
-```{r}
-distribution_plots <- data_long %>%
-  ggplot(aes(x = Wartości)) +
-  geom_histogram(aes(y = ..density.., 
-                     text = paste("Gęstość:", round(..density.., 2), "<br>Wartość:", scales::comma(..x..))),
-                 bins = 30, color = "black", alpha = 0.5) + 
-  geom_density(color = "red", size = 0.4) +  
-  facet_wrap(~ Atrybuty, scales = "free", ncol = 3) +  
-  theme_minimal() +
-  theme(
-    panel.spacing = unit(2, "lines"),
-    axis.text.y = element_text(size = 8, margin = margin(r = 5)),
-    plot.margin = margin(b = 20, r = 10)
-  ) +
-  labs(title = "Rozkłady wartości atrybutów", x = "Wartości", y = "Gęstość")
-
-ggplotly(distribution_plots, tooltip = "text") %>%
-  layout(hovermode = "x", width = 800)
+## Rozkłady gęstości atrybutów
+```{r density}
+density_distribution <- function(data) {
+  distribution_plots <- data %>%
+    ggplot(aes(x = Wartości)) +
+    geom_histogram(aes(y = ..density.., 
+                       text = paste("Gęstość:", round(..density.., 2), "<br>Wartość:", scales::comma(..x..))),
+                   bins = 30, color = "black", alpha = 0.5) + 
+    geom_density(color = "red", size = 0.4) +  
+    facet_wrap(~ Atrybuty, scales = "free", ncol = 3) +  
+    theme_minimal() +
+    theme(
+      panel.spacing = unit(2, "lines"),
+      axis.text.y = element_text(size = 8, margin = margin(r = 5)),
+      plot.margin = margin(b = 20, r = 10)
+    ) +
+    labs(title = "Rozkłady gęstości atrybutów", x = "Wartości", y = "Gęstość")
+  
+  ggplotly(distribution_plots, tooltip = "text") %>%
+    layout(hovermode = "x", width = 800)
+}
 ```
+
+### Przed czyszczeniem danych
+```{r echo=FALSE}
+data_long_original <- data %>% 
+  select_if(is.numeric) %>% 
+  pivot_longer(cols = everything(), names_to = "Atrybuty", values_to = "Wartości")
+
+density_distribution(data_long_original)
+```
+### Po czyszczeniu danych
+```{r echo=FALSE}
+density_distribution(data_long)
+```
+
+### Komentarz
+Po wykresach widać, że rozkłady atrybutów są bardziej zbliżone do rozkładu normalnego po usunięciu danych. Dalej są one w większości prawoskośnie, ale ich wariancja jest większa. To znaczy, że zaproponowana metoda usuwania wartości odstających, mimo że restrykcyjna spowoduje zachowanie lepszej jakości danych, kosztem utraty części instancji. Również ten zabieg może pozytywnie wpłynąć na predykcję modelu, przez większe zbalansowanie cech.
 
 ## Analiza wartości atrybutów
 ### Liczba baterii w zależności od głównego jonu
