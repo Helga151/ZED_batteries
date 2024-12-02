@@ -18,7 +18,8 @@ knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
 Analiza przeprowadzona w tym raporcie koncentrowała się na badaniu zależności między różnymi właściwościami baterii. Główne spostrzeżenia obejmują:
 
 - Dominującym głównym jonem baterii jest lit, który stanowi 50% wszystkich badanych baterii.
-- Baterie wapniowe mogą być dobrą alternatywą do litowo-jonowych, ponieważ mają dużą gęstość energii (największą z badanych jonów), większą pojemność oraz lepszy wskaźnik stabilności. To powoduje, że mogą one oferować obiecującą wydajność i wyższy poziom bezpieczeństwa.
+- Baterie wapniowe (Ca) mogą być dobrą alternatywą do litowo-jonowych, ponieważ mają dużą gęstość energii (największą z badanych jonów), większą pojemność oraz lepszy wskaźnik stabilności. To powoduje, że mogą one oferować obiecującą wydajność i wyższy poziom bezpieczeństwa.
+- Również itr (Y) dobrze wyszedł w analizach, przez drugą największą gęstość energii i pojemność oraz większą stabilność niż baterie wapniowe. Jednak cechą dyskryminującą ten pierwiastkiem jest to, że jest potencjalnie rakotwórczy i jego wdychanie może spowodować choroby płuc. Jest również uznawany za radioaktywny, toksyczny dla ludzi, zwierząt i roślin: https://en.wikipedia.org/wiki/Yttrium#Precautions 
 - Silne korelacje między parametrami wolumetrycznymi i grawimetrycznymi.
 - Silne korelacje między gęstością energii i pojemnością.
 - Model regresji osiągnął wysoki współczynnik determinacji (R²), co wskazuje na dobrą jakość predykcji gęstości energii wolumetrycznej.
